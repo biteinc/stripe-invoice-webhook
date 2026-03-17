@@ -1,18 +1,7 @@
 {
-  "rewrites": [
-    { "source": "/api/webhook", "destination": "/api/webhook.py" }
-  ]
+  "functions": {
+    "api/webhook.py": {
+      "runtime": "vercel-python@3.0.0"
+    }
+  }
 }
-```
-
-5. Scroll down, make sure **"Commit directly to the main branch"** is selected, and click **Commit new file**
-
----
-
-That's all three files done! Your repository should now look like this:
-```
-stripe-invoice-webhook/
-├── api/
-│   └── webhook.py
-├── requirements.txt
-└── vercel.json
