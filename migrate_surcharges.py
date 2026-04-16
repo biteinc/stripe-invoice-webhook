@@ -1,7 +1,7 @@
 import os
 import stripe
 
-stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+stripe.api_key = os.environ["SURCHARGE_STRIPE_SECRET_KEY"]
 
 SURCHARGE_PRODUCT_ID = "prod_TwsauvTg8JPMTs"
 SURCHARGE_RATE = 0.03
