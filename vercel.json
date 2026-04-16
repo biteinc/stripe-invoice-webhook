@@ -1,6 +1,1 @@
-{
-      "functions": {
-              "api/index.py": {},
-              "api/surcharge_webhook.py": {}
-      }
-}
+{}
