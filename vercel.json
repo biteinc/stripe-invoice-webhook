@@ -1,10 +1,6 @@
 {
-    "functions": {
-          "api/index.py": {
-                  "runtime": "python3.12"
-          },
-          "api/surcharge_webhook.py": {
-                  "runtime": "python3.12"
-          }
-    }
+      "functions": {
+              "api/index.py": {},
+              "api/surcharge_webhook.py": {}
+      }
 }
