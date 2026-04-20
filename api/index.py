@@ -117,9 +117,12 @@ def recalculate_surcharge(sub):
 
 def handle_subscription_updated(event):
     new_sub = event["data"]["object"]
-    # Convert previous_attributes to plain dict to avoid StripeObject issues
-    raw_previous = event["data"].get("previous_attributes")
-    previous = dict(raw_previous) if raw_previous else {}
+    # Use key access instead of .get() — StripeObject doesn't support .get() on event["data"]
+    try:
+        raw_previous = event["data"]["previous_attributes"]
+        previous = dict(raw_previous) if raw_previous else {}
+    except (KeyError, AttributeError):
+        previous = {}
 
     # Reload subscription with full item details
     sub = stripe.Subscription.retrieve(new_sub["id"], expand=["items.data.price"])
@@ -167,8 +170,11 @@ def handle_subscription_updated(event):
 
 def handle_customer_updated(event):
     customer = event["data"]["object"]
-    raw_previous = event["data"].get("previous_attributes")
-    previous = dict(raw_previous) if raw_previous else {}
+    try:
+        raw_previous = event["data"]["previous_attributes"]
+        previous = dict(raw_previous) if raw_previous else {}
+    except (KeyError, AttributeError):
+        previous = {}
     if "invoice_settings" not in previous and "default_source" not in previous:
         print(f"[cus: {customer['id']}] No PM change — ignoring.")
         return
