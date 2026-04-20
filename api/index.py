@@ -11,12 +11,23 @@ SURCHARGE_RATE = 0.03
 
 
 def sget(obj, key, default=None):
-    """Safe get that works on both dicts and StripeObjects."""
+    """Safe get for both dicts and StripeObjects."""
     try:
         val = obj[key]
         return val if val is not None else default
     except (KeyError, IndexError, TypeError):
         return default
+
+
+def to_plain(obj):
+    """Recursively convert StripeObject to plain dict/list."""
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if isinstance(obj, dict):
+        return {k: to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [to_plain(i) for i in obj]
+    return obj
 
 
 def get_payment_method_type(subscription):
@@ -125,9 +136,7 @@ def add_surcharge_to_subscription(sub):
 
 
 def recalculate_surcharge(sub):
-    """Remove existing surcharge and add a fresh one based on current prices."""
     remove_surcharge_from_subscription(sub)
-    # Re-fetch subscription after removal so find_surcharge_item sees clean state
     sub = stripe.Subscription.retrieve(sub["id"], expand=["items.data.price"])
     add_surcharge_to_subscription(sub)
 
@@ -136,34 +145,29 @@ def handle_subscription_updated(event):
     new_sub = event["data"]["object"]
     try:
         raw_previous = event["data"]["previous_attributes"]
-        previous = dict(raw_previous) if raw_previous else {}
+        previous = to_plain(raw_previous) if raw_previous else {}
     except (KeyError, AttributeError):
         previous = {}
 
-    # Reload subscription with full item details
+    print(f"previous keys: {list(previous.keys())}")
+
     sub = stripe.Subscription.retrieve(new_sub["id"], expand=["items.data.price"])
     pm_type = get_payment_method_type(sub)
-
     pm_changed = "default_payment_method" in previous
 
-    # Check if any NON-surcharge item changed
     items_changed = False
     if "items" in previous:
-        raw_items = previous.get("items") if hasattr(previous, 'get') else previous["items"]
-        if raw_items is not None:
+        items_data = previous.get("items", {}).get("data", [])
+        print(f"previous items: {len(items_data)}")
+        for item in items_data:
             try:
-                items_data = list(raw_items["data"])
+                product = item["price"]["product"]
             except Exception:
-                items_data = []
-
-            for item in items_data:
-                try:
-                    product = item["price"]["product"]
-                except Exception:
-                    product = None
-                if product != SURCHARGE_PRODUCT_ID:
-                    items_changed = True
-                    break
+                product = None
+            print(f"  item product: {product}")
+            if product != SURCHARGE_PRODUCT_ID:
+                items_changed = True
+                break
 
     print(f"[{sub['id']}] Updated — pm_changed: {pm_changed}, items_changed: {items_changed}, pm_type: {pm_type}")
 
@@ -185,7 +189,7 @@ def handle_customer_updated(event):
     customer = event["data"]["object"]
     try:
         raw_previous = event["data"]["previous_attributes"]
-        previous = dict(raw_previous) if raw_previous else {}
+        previous = to_plain(raw_previous) if raw_previous else {}
     except (KeyError, AttributeError):
         previous = {}
 
