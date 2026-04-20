@@ -60,7 +60,8 @@ def get_payment_method_type(subscription):
 
 def find_surcharge_item(subscription):
     for item in subscription["items"]["data"]:
-        price = item["price"] if isinstance(item["price"], dict) else stripe.Price.retrieve(item["price"])
+        price_field = item["price"]
+        price = price_field if not isinstance(price_field, str) else stripe.Price.retrieve(price_field)
         if price["product"] == SURCHARGE_PRODUCT_ID:
             return item
     return None
@@ -69,7 +70,8 @@ def find_surcharge_item(subscription):
 def calculate_surcharge_cents(subscription):
     total = 0
     for item in subscription["items"]["data"]:
-        price = item["price"] if isinstance(item["price"], dict) else stripe.Price.retrieve(item["price"])
+        price_field = item["price"]
+        price = price_field if not isinstance(price_field, str) else stripe.Price.retrieve(price_field)
         if price["product"] == SURCHARGE_PRODUCT_ID:
             continue
         unit_amount = sget(price, "unit_amount") or 0
