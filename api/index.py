@@ -70,6 +70,7 @@ def get_or_create_surcharge_price(amount_cents, interval):
         currency="usd",
         recurring={"interval": interval},
         nickname=f"CC Surcharge ${amount_cents / 100:.2f}/{interval}",
+        tax_behavior="exclusive",
     )
     return new_price["id"]
 
@@ -109,12 +110,16 @@ def add_surcharge_to_subscription(sub):
 def recalculate_surcharge(sub):
     """Remove existing surcharge and add a fresh one based on current prices."""
     remove_surcharge_from_subscription(sub)
+    # Re-fetch subscription after removal so find_surcharge_item sees clean state
+    sub = stripe.Subscription.retrieve(sub["id"], expand=["items.data.price"])
     add_surcharge_to_subscription(sub)
 
 
 def handle_subscription_updated(event):
     new_sub = event["data"]["object"]
-    previous = event["data"].get("previous_attributes", {})
+    # Convert previous_attributes to plain dict to avoid StripeObject issues
+    raw_previous = event["data"].get("previous_attributes")
+    previous = dict(raw_previous) if raw_previous else {}
 
     # Reload subscription with full item details
     sub = stripe.Subscription.retrieve(new_sub["id"], expand=["items.data.price"])
@@ -123,21 +128,34 @@ def handle_subscription_updated(event):
     # Check if payment method changed
     pm_changed = "default_payment_method" in previous
 
-    # Check if subscription items changed (price or quantity)
-    items_changed = "items" in previous
+    # Check if any NON-surcharge item changed
+    items_changed = False
+    if "items" in previous:
+        raw_items = previous.get("items")
+        if raw_items is not None:
+            try:
+                items_data = list(raw_items.get("data", []))
+            except Exception:
+                items_data = list(raw_items) if raw_items else []
+
+            for item in items_data:
+                try:
+                    product = item["price"]["product"]
+                except Exception:
+                    product = None
+                if product != SURCHARGE_PRODUCT_ID:
+                    items_changed = True
+                    break
 
     print(f"[{sub['id']}] Updated — pm_changed: {pm_changed}, items_changed: {items_changed}, pm_type: {pm_type}")
 
     if pm_changed:
         if pm_type == "card":
-            # Switched to card — add surcharge
             add_surcharge_to_subscription(sub)
         else:
-            # Switched away from card — remove surcharge
             remove_surcharge_from_subscription(sub)
 
     elif items_changed:
-        # Price or quantity changed — recalculate surcharge if on card
         if pm_type == "card":
             recalculate_surcharge(sub)
         else:
@@ -149,7 +167,8 @@ def handle_subscription_updated(event):
 
 def handle_customer_updated(event):
     customer = event["data"]["object"]
-    previous = event["data"].get("previous_attributes", {})
+    raw_previous = event["data"].get("previous_attributes")
+    previous = dict(raw_previous) if raw_previous else {}
     if "invoice_settings" not in previous and "default_source" not in previous:
         print(f"[cus: {customer['id']}] No PM change — ignoring.")
         return
@@ -190,7 +209,6 @@ def handle_invoice_created(invoice):
         return
 
     if invoice["status"] == "draft":
-        # Draft invoice — add surcharge as invoice item
         post_tax_total = invoice.get("total", 0)
         if post_tax_total <= 0:
             print(f"Skipping {invoice_id} — zero total")
@@ -210,7 +228,6 @@ def handle_invoice_created(invoice):
         except stripe.error.StripeError as e:
             print(f"✗ Failed: {e}")
     else:
-        # Already finalized — ensure surcharge is on the subscription
         print(f"Invoice {invoice_id} already finalized — ensuring surcharge on subscription")
         add_surcharge_to_subscription(sub)
 
@@ -241,7 +258,8 @@ class handler(BaseHTTPRequestHandler):
             else:
                 print(f"Unhandled: {event['type']}")
         except Exception as e:
-            print(f"ERROR: {e}")
+            import traceback
+            print(f"ERROR: {traceback.format_exc()}")
 
         self._respond(200, {"received": True})
 
