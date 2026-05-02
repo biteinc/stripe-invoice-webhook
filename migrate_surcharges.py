@@ -51,7 +51,7 @@ def get_payment_method_type(subscription):
             source = default_source
         return "us_bank_account" if source["object"] == "bank_account" else source["object"]
 
-    # Tier 3: look at the most recent paid invoice's payment intent.
+    # Tier 3: look at the most recent paid invoice's payment intent
     # This catches customers whose card is stored only at charge time,
     # not on the subscription or customer record.
     try:
@@ -163,7 +163,7 @@ def main():
                     results["skipped_already_has_surcharge"].append(label)
                     continue
 
-                if sub.get("collection_method") != "charge_automatically":
+                if sub.get("collection_method") == "send_invoice":
                     results["skipped_send_invoice"].append(label)
                     continue
 
