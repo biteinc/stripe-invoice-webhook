@@ -12,15 +12,24 @@ price_cache = {}
 
 
 def get_payment_method_type(subscription):
+    """
+    Determines payment method type using 3-tier fallback:
+    1. PM set directly on subscription
+    2. PM set on customer (invoice_settings or default_source)
+    3. Most recent paid invoice -> payment intent -> PM type (catches customers
+       whose card is stored only at the payment-intent level)
+    """
+    # Tier 1: subscription-level PM
     pm = subscription.get("default_payment_method")
     if pm:
         if isinstance(pm, dict):
             return pm.get("type")
-        if hasattr(pm, 'type'):
+        if hasattr(pm, "type"):
             return pm.type
         pm = stripe.PaymentMethod.retrieve(pm)
         return pm["type"]
 
+    # Tier 2: customer-level PM
     customer = stripe.Customer.retrieve(
         subscription["customer"],
         expand=["invoice_settings.default_payment_method"]
@@ -29,7 +38,7 @@ def get_payment_method_type(subscription):
     if invoice_pm:
         if isinstance(invoice_pm, dict):
             return invoice_pm.get("type")
-        if hasattr(invoice_pm, 'type'):
+        if hasattr(invoice_pm, "type"):
             return invoice_pm.type
         pm = stripe.PaymentMethod.retrieve(invoice_pm)
         return pm["type"]
@@ -42,13 +51,31 @@ def get_payment_method_type(subscription):
             source = default_source
         return "us_bank_account" if source["object"] == "bank_account" else source["object"]
 
+    # Tier 3: look at the most recent paid invoice's payment intent.
+    # This catches customers whose card is stored only at charge time,
+    # not on the subscription or customer record.
+    try:
+        invoices = stripe.Invoice.list(
+            subscription=subscription["id"],
+            status="paid",
+            limit=1,
+        )
+        if invoices["data"]:
+            invoice = invoices["data"][0]
+            pi_id = invoice.get("payment_intent")
+            if pi_id:
+                pi = stripe.PaymentIntent.retrieve(pi_id)
+                pm_id = pi.get("payment_method")
+                if pm_id:
+                    pm = stripe.PaymentMethod.retrieve(pm_id)
+                    return pm["type"]
+    except Exception:
+        pass
+
     return None
 
 
 def find_surcharge_item(subscription):
-    """
-    Returns the existing surcharge subscription item if one exists, else None.
-    """
     for item in subscription["items"]["data"]:
         price = item["price"] if isinstance(item["price"], dict) else stripe.Price.retrieve(item["price"])
         if price["product"] == SURCHARGE_PRODUCT_ID:
@@ -57,9 +84,6 @@ def find_surcharge_item(subscription):
 
 
 def calculate_surcharge_cents(subscription):
-    """
-    Calculates the 3% surcharge amount in cents based on the subscription total.
-    """
     total = 0
     for item in subscription["items"]["data"]:
         price = item["price"] if isinstance(item["price"], dict) else stripe.Price.retrieve(item["price"])
@@ -70,10 +94,6 @@ def calculate_surcharge_cents(subscription):
 
 
 def get_or_create_surcharge_price(amount_cents, interval):
-    """
-    Returns an existing recurring surcharge price for the given amount,
-    or creates a new one if none exists.
-    """
     cache_key = f"{amount_cents}_{interval}"
     if cache_key in price_cache:
         return price_cache[cache_key]
@@ -93,7 +113,7 @@ def get_or_create_surcharge_price(amount_cents, interval):
         price_cache[cache_key] = placeholder
         return placeholder
 
-new_price = stripe.Price.create(
+    new_price = stripe.Price.create(
         product=SURCHARGE_PRODUCT_ID,
         unit_amount=amount_cents,
         currency="usd",
@@ -125,7 +145,6 @@ def main():
         "errors": [],
     }
 
-    # Paginate through all active subscriptions
     params = {
         "status": "active",
         "limit": 100,
@@ -140,17 +159,14 @@ def main():
             label = f"{sub['id']} (cus: {sub['customer']})"
 
             try:
-                # Skip if surcharge already exists
                 if find_surcharge_item(sub):
                     results["skipped_already_has_surcharge"].append(label)
                     continue
 
-                # CRITICAL: Only process auto-charge subscriptions
                 if sub.get("collection_method") != "charge_automatically":
                     results["skipped_send_invoice"].append(label)
                     continue
 
-                # Check payment method type
                 pm_type = get_payment_method_type(sub)
 
                 if not pm_type:
@@ -161,13 +177,11 @@ def main():
                     results["skipped_ach"].append(f"{label} [{pm_type}]")
                     continue
 
-                # Calculate surcharge amount
                 surcharge_cents = calculate_surcharge_cents(sub)
                 if surcharge_cents <= 0:
                     results["skipped_zero_amount"].append(label)
                     continue
 
-                # Get billing interval from primary item
                 primary_item = next(
                     (i for i in sub["items"]["data"]
                      if i["price"]["product"] != SURCHARGE_PRODUCT_ID),
@@ -175,10 +189,8 @@ def main():
                 )
                 interval = primary_item["price"].get("recurring", {}).get("interval", "month") if primary_item else "month"
 
-                # Get or create the surcharge price
                 surcharge_price_id = get_or_create_surcharge_price(surcharge_cents, interval)
 
-                # Add surcharge item to subscription
                 if not DRY_RUN:
                     stripe.SubscriptionItem.create(
                         subscription=sub["id"],
@@ -198,7 +210,6 @@ def main():
 
         params["starting_after"] = page["data"][-1]["id"]
 
-    # Print summary
     print("\n" + "=" * 20 + " RESULTS " + "=" * 20)
     print()
     print(f"Total subscriptions processed:  {results['total']}")
