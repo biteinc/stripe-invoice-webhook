@@ -32,44 +32,11 @@ def to_plain(obj):
 
 def get_payment_method_type(subscription):
     """
-    Determines payment method type using 3-tier fallback:
-    1. PM set directly on subscription
-    2. PM set on customer (invoice_settings or default_source)
-    3. Most recent paid invoice -> payment intent -> PM type (catches customers
-       whose card is stored only at the payment-intent level)
+    Determines payment method type by looking at the most recent successfully
+    paid invoice's payment intent. This is the only reliable signal that a
+    subscription is genuinely on autopay -- a card on file at the customer or
+    subscription level does NOT mean autopay. Only a paid invoice proves it.
     """
-    # Tier 1: subscription-level PM
-    pm_id = sget(subscription, "default_payment_method")
-    if pm_id:
-        if isinstance(pm_id, dict):
-            return pm_id["type"]
-        pm = stripe.PaymentMethod.retrieve(pm_id)
-        return pm["type"]
-
-    # Tier 2: customer-level PM
-    customer = stripe.Customer.retrieve(
-        subscription["customer"],
-        expand=["invoice_settings.default_payment_method"]
-    )
-    invoice_settings = sget(customer, "invoice_settings") or {}
-    invoice_pm = sget(invoice_settings, "default_payment_method")
-    if invoice_pm:
-        if isinstance(invoice_pm, str):
-            pm = stripe.PaymentMethod.retrieve(invoice_pm)
-            return pm["type"]
-        return invoice_pm["type"]
-
-    default_source = sget(customer, "default_source")
-    if default_source:
-        if isinstance(default_source, str):
-            source = stripe.Customer.retrieve_source(customer["id"], default_source)
-        else:
-            source = default_source
-        return "us_bank_account" if source["object"] == "bank_account" else source["object"]
-
-    # Tier 3: look at the most recent paid invoice's payment intent.
-    # This catches customers whose card is stored only at charge time,
-    # not on the subscription or customer record.
     try:
         invoices = stripe.Invoice.list(
             subscription=subscription["id"],
