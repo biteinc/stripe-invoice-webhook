@@ -42,14 +42,16 @@ def get_payment_method_type(subscription):
             subscription=subscription["id"],
             status="paid",
             limit=1,
+            expand=["data.payment_intent"],
         )
         if invoices["data"]:
             invoice = invoices["data"][0]
-            pi_id = sget(invoice, "payment_intent")
-            if pi_id:
-                pi = stripe.PaymentIntent.retrieve(pi_id)
+            pi = sget(invoice, "payment_intent")
+            if pi and isinstance(pi, dict):
                 pm_id = sget(pi, "payment_method")
                 if pm_id:
+                    if isinstance(pm_id, dict):
+                        return pm_id.get("type")
                     pm = stripe.PaymentMethod.retrieve(pm_id)
                     return pm["type"]
     except Exception:
