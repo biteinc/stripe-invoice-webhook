@@ -176,73 +176,6 @@ def recalculate_surcharge(sub):
     add_surcharge_to_subscription(sub)
 
 
-def find_surcharge_invoice_item(invoice_id):
-    """Check if a surcharge line item already exists on this draft invoice."""
-    items = stripe.InvoiceItem.list(invoice=invoice_id, limit=100)
-    for item in items["data"]:
-        if sget(item, "metadata", {}).get("surcharge") == "true":
-            return item
-    return None
-
-
-def handle_invoice_created(invoice):
-    invoice_id = invoice["id"]
-    sub_id = sget(invoice, "subscription")
-
-    if not sub_id:
-        print(f"Skipping {invoice_id} — not a subscription invoice")
-        return
-
-    if sget(invoice, "collection_method") != "charge_automatically":
-        print(f"Skipping {invoice_id} — not autopay")
-        return
-
-    # Only act on draft invoices — that's the only state invoice.created fires in
-    if sget(invoice, "status") != "draft":
-        print(f"Skipping {invoice_id} — status is {invoice['status']}, not draft")
-        return
-
-    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
-    pm_type = get_payment_method_type(sub)
-    print(f"Invoice {invoice_id} — pm_type: {pm_type}")
-
-    if pm_type != "card":
-        # If customer switched away from card, remove any stale surcharge invoice item
-        existing = find_surcharge_invoice_item(invoice_id)
-        if existing:
-            stripe.InvoiceItem.delete(existing["id"])
-            print(f"Invoice {invoice_id} — removed stale surcharge item (no longer card)")
-        else:
-            print(f"Skipping {invoice_id} — not a card")
-        return
-
-    # Guard: don't add a second surcharge if one already exists on this invoice
-    if find_surcharge_invoice_item(invoice_id):
-        print(f"Invoice {invoice_id} — surcharge item already present, skipping")
-        return
-
-    # Calculate from subscription base amount only — never from invoice total,
-    # which would compound the surcharge on top of itself each cycle
-    surcharge_amount = calculate_surcharge_cents(sub)
-    if surcharge_amount <= 0:
-        print(f"Skipping {invoice_id} — zero surcharge amount")
-        return
-
-    print(f"Adding ${surcharge_amount/100:.2f} surcharge to draft invoice {invoice_id}")
-    try:
-        stripe.InvoiceItem.create(
-            customer=invoice["customer"],
-            invoice=invoice_id,
-            amount=surcharge_amount,
-            currency=sget(invoice, "currency") or "usd",
-            description="Credit Card Processing Fee (3%)",
-            metadata={"surcharge": "true"}
-        )
-        print(f"✓ Surcharge added to invoice {invoice_id}")
-    except stripe.error.StripeError as e:
-        print(f"✗ Failed: {e}")
-
-
 def handle_subscription_updated(event):
     new_sub = event["data"]["object"]
     try:
@@ -312,6 +245,73 @@ def handle_customer_updated(event):
             recalculate_surcharge(sub)
         else:
             remove_surcharge_from_subscription(sub)
+
+
+def find_surcharge_invoice_item(invoice_id):
+    """Check if a surcharge line item already exists on this draft invoice."""
+    items = stripe.InvoiceItem.list(invoice=invoice_id, limit=100)
+    for item in items["data"]:
+        if sget(item, "metadata", {}).get("surcharge") == "true":
+            return item
+    return None
+
+
+def handle_invoice_created(invoice):
+    invoice_id = invoice["id"]
+    sub_id = sget(invoice, "subscription")
+
+    if not sub_id:
+        print(f"Skipping {invoice_id} — not a subscription invoice")
+        return
+
+    if sget(invoice, "collection_method") == "send_invoice":
+        print(f"Skipping {invoice_id} — not autopay")
+        return
+
+    # Only act on draft invoices — that's the only state invoice.created fires in
+    if sget(invoice, "status") != "draft":
+        print(f"Skipping {invoice_id} — status is {invoice['status']}, not draft")
+        return
+
+    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
+    pm_type = get_payment_method_type(sub)
+    print(f"Invoice {invoice_id} — pm_type: {pm_type}")
+
+    if pm_type != "card":
+        # If customer switched away from card, remove any existing surcharge invoice item
+        existing = find_surcharge_invoice_item(invoice_id)
+        if existing:
+            stripe.InvoiceItem.delete(existing["id"])
+            print(f"Invoice {invoice_id} — removed stale surcharge item (no longer card)")
+        else:
+            print(f"Skipping {invoice_id} — not a card")
+        return
+
+    # Guard: don't add a second surcharge if one already exists on this invoice
+    if find_surcharge_invoice_item(invoice_id):
+        print(f"Invoice {invoice_id} — surcharge item already present, skipping")
+        return
+
+    # Calculate from subscription base amount only — never from invoice total,
+    # which would compound the surcharge on top of itself each cycle
+    surcharge_amount = calculate_surcharge_cents(sub)
+    if surcharge_amount <= 0:
+        print(f"Skipping {invoice_id} — zero surcharge amount")
+        return
+
+    print(f"Adding ${surcharge_amount/100:.2f} surcharge to draft invoice {invoice_id}")
+    try:
+        stripe.InvoiceItem.create(
+            customer=invoice["customer"],
+            invoice=invoice_id,
+            amount=surcharge_amount,
+            currency=sget(invoice, "currency") or "usd",
+            description="Credit Card Processing Fee (3%)",
+            metadata={"surcharge": "true"}
+        )
+        print(f"✓ Surcharge added to invoice {invoice_id}")
+    except stripe.error.StripeError as e:
+        print(f"✗ Failed: {e}")
 
 
 class handler(BaseHTTPRequestHandler):
