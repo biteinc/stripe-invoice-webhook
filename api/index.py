@@ -32,31 +32,30 @@ def to_plain(obj):
 
 def get_payment_method_type(subscription):
     """
-    Determines payment method type by looking at the most recent successful
-    charge for this customer on this subscription. Uses stripe.Charge.list
-    which reliably returns payment_method_details.type (card, us_bank_account,
-    etc.) directly off the charge object — no payment intent lookup needed.
-    This is the same data visible in the Stripe dashboard transactions view.
-    Only a successful charge proves autopay actually happened.
+    Determines payment method type by looking at the most recent paid invoice
+    for this subscription, then reading the charge directly off that invoice.
+    Stripe invoices have a 'charge' field linking directly to the charge object.
+    The charge has payment_method_details.type = 'card' or 'us_bank_account'.
+    This works for both legacy (pre-PaymentIntent) and modern Stripe accounts.
+    Only a paid invoice with a real charge proves autopay actually happened.
     """
     try:
-        charges = stripe.Charge.list(
-            customer=subscription["customer"],
-            limit=5,
+        invoices = stripe.Invoice.list(
+            subscription=subscription["id"],
+            status="paid",
+            limit=1,
         )
-        for charge in charges["data"]:
-            if sget(charge, "status") != "succeeded":
-                continue
-            invoice_id = sget(charge, "invoice")
-            if not invoice_id:
-                continue
-            invoice = stripe.Invoice.retrieve(invoice_id)
-            if sget(invoice, "subscription") != subscription["id"]:
-                continue
-            pmd = sget(charge, "payment_method_details") or {}
-            pm_type = sget(pmd, "type")
-            if pm_type:
-                return pm_type
+        if not invoices["data"]:
+            return None
+        invoice = invoices["data"][0]
+        charge_id = sget(invoice, "charge")
+        if not charge_id:
+            return None
+        charge = stripe.Charge.retrieve(charge_id)
+        if sget(charge, "status") != "succeeded":
+            return None
+        pmd = sget(charge, "payment_method_details") or {}
+        return sget(pmd, "type")
     except Exception:
         pass
 
