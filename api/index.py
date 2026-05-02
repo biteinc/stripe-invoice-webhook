@@ -264,10 +264,6 @@ def handle_invoice_created(invoice):
         print(f"Skipping {invoice_id} — not a subscription invoice")
         return
 
-    if sget(invoice, "collection_method") == "send_invoice":
-        print(f"Skipping {invoice_id} — not autopay")
-        return
-
     # Only act on draft invoices — that's the only state invoice.created fires in
     if sget(invoice, "status") != "draft":
         print(f"Skipping {invoice_id} — status is {invoice['status']}, not draft")
