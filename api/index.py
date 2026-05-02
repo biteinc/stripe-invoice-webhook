@@ -32,30 +32,28 @@ def to_plain(obj):
 
 def get_payment_method_type(subscription):
     """
-    Determines payment method type by looking at the most recent paid invoice
-    for this subscription, then reading the charge directly off that invoice.
-    Stripe invoices have a 'charge' field linking directly to the charge object.
-    The charge has payment_method_details.type = 'card' or 'us_bank_account'.
-    This works for both legacy (pre-PaymentIntent) and modern Stripe accounts.
-    Only a paid invoice with a real charge proves autopay actually happened.
+    Determines payment method type by listing the most recent successful charge
+    for this customer. On this Stripe account, charges are not linked to invoices
+    or subscriptions via standard fields (legacy account structure), so we go
+    directly to the charge object which always has payment_method_details.type.
+    Only customers with at least one successful charge are considered autopay.
     """
     try:
-        invoices = stripe.Invoice.list(
-            subscription=subscription["id"],
-            status="paid",
-            limit=1,
+        charges = stripe.Charge.list(
+            customer=subscription["customer"],
+            limit=3,
         )
-        if not invoices["data"]:
-            return None
-        invoice = invoices["data"][0]
-        charge_id = sget(invoice, "charge")
-        if not charge_id:
-            return None
-        charge = stripe.Charge.retrieve(charge_id)
-        if sget(charge, "status") != "succeeded":
-            return None
-        pmd = sget(charge, "payment_method_details") or {}
-        return sget(pmd, "type")
+        for charge in charges["data"]:
+            if sget(charge, "status") != "succeeded":
+                continue
+            pmd = sget(charge, "payment_method_details")
+            if not pmd:
+                continue
+            if hasattr(pmd, "to_dict"):
+                pmd = pmd.to_dict()
+            pm_type = pmd.get("type")
+            if pm_type:
+                return pm_type
     except Exception:
         pass
 
