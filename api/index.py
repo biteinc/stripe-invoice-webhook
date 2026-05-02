@@ -32,28 +32,31 @@ def to_plain(obj):
 
 def get_payment_method_type(subscription):
     """
-    Determines payment method type by looking at the most recent successfully
-    paid invoice's payment intent. This is the only reliable signal that a
-    subscription is genuinely on autopay -- a card on file at the customer or
-    subscription level does NOT mean autopay. Only a paid invoice proves it.
+    Determines payment method type by looking at the most recent successful
+    charge for this customer on this subscription. Uses stripe.Charge.list
+    which reliably returns payment_method_details.type (card, us_bank_account,
+    etc.) directly off the charge object — no payment intent lookup needed.
+    This is the same data visible in the Stripe dashboard transactions view.
+    Only a successful charge proves autopay actually happened.
     """
     try:
-        invoices = stripe.Invoice.list(
-            subscription=subscription["id"],
-            status="paid",
-            limit=1,
-            expand=["data.payment_intent"],
+        charges = stripe.Charge.list(
+            customer=subscription["customer"],
+            limit=5,
         )
-        if invoices["data"]:
-            invoice = invoices["data"][0]
-            pi = sget(invoice, "payment_intent")
-            if pi and isinstance(pi, dict):
-                pm_id = sget(pi, "payment_method")
-                if pm_id:
-                    if isinstance(pm_id, dict):
-                        return pm_id.get("type")
-                    pm = stripe.PaymentMethod.retrieve(pm_id)
-                    return pm["type"]
+        for charge in charges["data"]:
+            if sget(charge, "status") != "succeeded":
+                continue
+            invoice_id = sget(charge, "invoice")
+            if not invoice_id:
+                continue
+            invoice = stripe.Invoice.retrieve(invoice_id)
+            if sget(invoice, "subscription") != subscription["id"]:
+                continue
+            pmd = sget(charge, "payment_method_details") or {}
+            pm_type = sget(pmd, "type")
+            if pm_type:
+                return pm_type
     except Exception:
         pass
 
